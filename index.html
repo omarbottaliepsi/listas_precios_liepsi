@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consulta de Precios y Stock - Liepsi</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS para leer archivos Excel (.xlsx) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen">
+
+  <!-- ENCABEZADO -->
+  <header class="bg-slate-900 text-white p-4 shadow-md sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div>
+        <h1 class="text-xl font-bold tracking-wide flex items-center gap-2">
+          🔍 Consulta Liepsi <span class="text-xs font-normal bg-slate-800 px-2 py-0.5 rounded text-slate-300">Catálogo & Stock</span>
+        </h1>
+        <p class="text-xs text-slate-400" id="status-text">Cargando catálogo de artículos...</p>
+      </div>
+
+      <!-- BOTÓN DE CARGA DE STOCK -->
+      <div class="flex items-center gap-2">
+        <label for="stock-file" class="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow transition flex items-center gap-2">
+          📦 <span id="stock-btn-label">Cargar Planilla de Stock</span>
+        </label>
+        <input type="file" id="stock-file" accept=".xlsx, .xls, .csv" class="hidden">
+
+        <!-- Botón opcional para actualizar catálogo de precios si se requiere -->
+        <label for="price-file" title="Actualizar catálogo de precios" class="cursor-pointer bg-slate-800 hover:bg-slate-700 text-xs p-2 rounded-lg border border-slate-700 text-slate-400 hover:text-white transition">
+          ⚙️
+        </label>
+        <input type="file" id="price-file" accept=".xlsx, .xls, .csv" class="hidden">
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-4 space-y-4">
+
+    <!-- FILTROS Y BÚSQUEDA -->
+    <section class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div class="md:col-span-2">
+        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Buscar Producto</label>
+        <input type="text" id="search-input" placeholder="Código, dimensión (ej: 195/65 R15), marca o gama..." class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Marca</label>
+        <select id="filter-marca" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white">
+          <option value="">Todas las marcas</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Filtro de Stock</label>
+        <select id="filter-stock" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white">
+          <option value="">Todos los artículos</option>
+          <option value="con-stock">Solo con Stock (> 0)</option>
+          <option value="sin-stock">Sin Stock (0 o no cargado)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- ESTADO DE RESULTADOS Y VINCULACIÓN -->
+    <div class="flex justify-between items-center text-xs text-slate-500 font-medium px-1">
+      <span id="results-count">0 productos encontrados</span>
+      <span id="stock-status-tag" class="text-slate-400">Pista: Puedes cargar la planilla de stock en cualquier momento</span>
+    </div>
+
+    <!-- VISTA TABLA (Para Pantalla de PC) -->
+    <div class="hidden md:block bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 text-slate-600 uppercase border-b border-slate-200 font-semibold">
+            <tr>
+              <th class="p-3">Código</th>
+              <th class="p-3">Dimensión</th>
+              <th class="p-3">Llanta</th>
+              <th class="p-3">Marca / Gama</th>
+              <th class="p-3">I.C. y V.</th>
+              <th class="p-3 text-center">Stock</th>
+              <th class="p-3">Precio Lista</th>
+              <th class="p-3">Precio Público</th>
+              <th class="p-3">Estado</th>
+            </tr>
+          </thead>
+          <tbody id="table-body" class="divide-y divide-slate-100">
+            <!-- Filas dinámicas -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- VISTA TARJETAS (Para Pantalla de Celular) -->
+    <div id="cards-container" class="grid grid-cols-1 gap-3 md:hidden">
+      <!-- Tarjetas dinámicas -->
+    </div>
+
+  </main>
+
+  <script>
+    let priceData = [];
+    let stockMap = {}; 
+    const AUTO_FILE = "Listas de precios.xlsx"; // Archivo precargado automático
+
+    document.addEventListener("DOMContentLoaded", () => {
+      // Intentar cargar automáticamente el archivo 'Listas de precios.xlsx'
+      fetch(AUTO_FILE)
+        .then(res => {
+          if (!res.ok) throw new Error("No se pudo cargar automáticamente");
+          return res.arrayBuffer();
+        })
+        .then(buffer => {
+          priceData = parseExcelBuffer(buffer);
+          initApp(`Catálogo precargado listo (${priceData.length} productos)`);
+        })
+        .catch(() => {
+          document.getElementById("status-text").textContent = "Carga manual: Selecciona el archivo de precios usando el icono ⚙️";
+        });
+
+      // Evento de Carga de Stock
+      document.getElementById("stock-file").addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            const rawStock = parseExcelBuffer(evt.target.result);
+            processStockData(rawStock);
+            document.getElementById("stock-btn-label").textContent = `Stock: ${file.name}`;
+            document.getElementById("stock-status-tag").textContent = "✅ Stock Vinculado por Código";
+            document.getElementById("stock-status-tag").className = "text-emerald-600 font-bold";
+            filterData();
+          };
+          reader.readAsArrayBuffer(file);
+        }
+      });
+
+      // Evento opcional para actualizar precios manualmente
+      document.getElementById("price-file").addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            priceData = parseExcelBuffer(evt.target.result);
+            initApp(`Precios actualizados desde ${file.name}`);
+          };
+          reader.readAsArrayBuffer(file);
+        }
+      });
+
+      // Listeners de búsqueda
+      document.getElementById("search-input").addEventListener("input", filterData);
+      document.getElementById("filter-marca").addEventListener("change", filterData);
+      document.getElementById("filter-stock").addEventListener("change", filterData);
+    });
+
+    function parseExcelBuffer(buffer) {
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const firstSheet = workbook.SheetNames[0];
+      return XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: "" });
+    }
+
+    function processStockData(rows) {
+      stockMap = {};
+      if (!rows.length) return;
+
+      const keys = Object.keys(rows[0]);
+      const codeKey = keys.find(k => k.toLowerCase().includes("cód") || k.toLowerCase().includes("cod") || k.toLowerCase().includes("item")) || keys[0];
+      const stockKey = keys.find(k => k.toLowerCase().includes("stock") || k.toLowerCase().includes("cant") || k.toLowerCase().includes("unid")) || keys[1];
+
+      rows.forEach(row => {
+        const code = String(row[codeKey] || "").trim().toUpperCase();
+        const qty = parseFloat(row[stockKey]) || 0;
+        if (code) {
+          stockMap[code] = (stockMap[code] || 0) + qty;
+        }
+      });
+    }
+
+    function initApp(msg) {
+      document.getElementById("status-text").textContent = msg;
+      populateMarcaFilter();
+      filterData();
+    }
+
+    function populateMarcaFilter() {
+      const marcas = [...new Set(priceData.map(item => item["MARCA"]).filter(Boolean))].sort();
+      const marcaSelect = document.getElementById("filter-marca");
+      marcaSelect.innerHTML = '<option value="">Todas las marcas</option>' + marcas.map(m => `<option value="${m}">${m}</option>`).join('');
+    }
+
+    function filterData() {
+      const search = document.getElementById("search-input").value.toLowerCase().trim();
+      const marca = document.getElementById("filter-marca").value;
+      const stockFilter = document.getElementById("filter-stock").value;
+
+      const filtered = priceData.filter(item => {
+        const itemCode = String(item["CÓDIGO"] || "").trim().toUpperCase();
+        const itemStock = stockMap[itemCode] !== undefined ? stockMap[itemCode] : null;
+
+        const matchesSearch = !search || 
+          itemCode.toLowerCase().includes(search) ||
+          String(item["DIMENSION"] || "").toLowerCase().includes(search) ||
+          String(item["GAMA"] || "").toLowerCase().includes(search) ||
+          String(item["MARCA"] || "").toLowerCase().includes(search);
+
+        const matchesMarca = !marca || item["MARCA"] === marca;
+
+        let matchesStock = true;
+        if (stockFilter === "con-stock") {
+          matchesStock = itemStock !== null && itemStock > 0;
+        } else if (stockFilter === "sin-stock") {
+          matchesStock = itemStock === null || itemStock <= 0;
+        }
+
+        return matchesSearch && matchesMarca && matchesStock;
+      });
+
+      render(filtered);
+    }
+
+    function render(data) {
+      document.getElementById("results-count").textContent = `${data.length} productos encontrados`;
+
+      // Render Tabla Desktop
+      const tableBody = document.getElementById("table-body");
+      tableBody.innerHTML = data.map(item => {
+        const code = String(item["CÓDIGO"] || "").trim().toUpperCase();
+        const hasStockData = stockMap[code] !== undefined;
+        const stockQty = hasStockData ? stockMap[code] : 0;
+
+        return `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="p-3 font-semibold text-slate-900">${item["CÓDIGO"] || '-'}</td>
+            <td class="p-3 font-medium">${item["DIMENSION"] || '-'}</td>
+            <td class="p-3">${item["LLANTA"] || '-'}</td>
+            <td class="p-3">
+              <div class="font-semibold text-slate-800">${item["MARCA"] || '-'}</div>
+              <div class="text-[10px] text-slate-400">${item["GAMA"] || '-'}</div>
+            </td>
+            <td class="p-3 text-slate-500">${item["I.C. y V."] || '-'}</td>
+            <td class="p-3 text-center">
+              ${!hasStockData 
+                ? '<span class="text-slate-300 text-[10px]">-</span>' 
+                : stockQty > 0 
+                  ? `<span class="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">${stockQty} u.</span>` 
+                  : `<span class="px-2.5 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700">0</span>`}
+            </td>
+            <td class="p-3 font-semibold text-slate-700">$${item["PRECIO DE LISTA USD"] || '-'}</td>
+            <td class="p-3 font-bold text-emerald-600">$${item["PRECIO PÚBLICO USD"] || '-'}</td>
+            <td class="p-3">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${item["TIPO DE PRECIO"] === 'OUTLET' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}">
+                ${item["TIPO DE PRECIO"] || 'NORMAL'}
+              </span>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      // Render Tarjetas Mobile
+      const cardsContainer = document.getElementById("cards-container");
+      cardsContainer.innerHTML = data.map(item => {
+        const code = String(item["CÓDIGO"] || "").trim().toUpperCase();
+        const hasStockData = stockMap[code] !== undefined;
+        const stockQty = hasStockData ? stockMap[code] : 0;
+
+        return `
+          <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-2">
+            <div class="flex justify-between items-start">
+              <div>
+                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">${item["MARCA"] || ''} • ${item["TIPO"] || ''}</span>
+                <h3 class="text-base font-bold text-slate-900">${item["DIMENSION"] || '-'}</h3>
+                <p class="text-xs text-slate-500">Cod: <span class="font-semibold text-slate-700">${item["CÓDIGO"] || '-'}</span> | Llanta: ${item["LLANTA"] || '-'}</p>
+              </div>
+              <div class="flex flex-col items-end gap-1">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold ${item["TIPO DE PRECIO"] === 'OUTLET' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}">
+                  ${item["TIPO DE PRECIO"] || 'NORMAL'}
+                </span>
+                ${hasStockData ? (
+                  stockQty > 0 
+                    ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">Stock: ${stockQty} u.</span>`
+                    : `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700">Sin Stock</span>`
+                ) : ''}
+              </div>
+            </div>
+
+            <div class="text-xs text-slate-500">
+              Gama: <span class="font-medium text-slate-700">${item["GAMA"] || '-'}</span> | IC/V: <span class="font-medium text-slate-700">${item["I.C. y V."] || '-'}</span>
+            </div>
+
+            <div class="pt-2 border-t border-slate-100 flex justify-between items-center">
+              <div>
+                <div class="text-[10px] text-slate-400 uppercase">Precio Lista</div>
+                <div class="text-xs font-semibold text-slate-600">$${item["PRECIO DE LISTA USD"] || '-'}</div>
+              </div>
+              <div class="text-right">
+                <div class="text-[10px] text-emerald-600 font-semibold uppercase">Precio Público</div>
+                <div class="text-lg font-bold text-emerald-600">$${item["PRECIO PÚBLICO USD"] || '-'}</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+  </script>
+</body>
+</html>
